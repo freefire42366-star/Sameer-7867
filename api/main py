@@ -5,89 +5,76 @@ import json
 
 app = FastAPI()
 
+# Configuration
 BASE_URL = "https://100067.connect.garena.com"
 APP_ID = "100067"
-SEC_CODE = "123456"
-
-def get_clean_headers(request: Request):
-    # Mobile signature simulation
-    ua = request.headers.get("user-agent", "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)")
-    return {
-        "User-Agent": ua,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept-Encoding": "gzip",
-        "Connection": "keep-alive"
-    }
+SEC_CODE = "123456" # Default Security Code
 
 def sha256_hash(s: str):
     return hashlib.sha256(s.encode()).hexdigest()
 
-# --- Internal: Get Account Bind Status ---
-def get_status(token, headers):
-    params = {"app_id": APP_ID, "access_token": token}
-    r = requests.get(f"{BASE_URL}/game/account_security/bind:get_bind_info", params=params, headers=headers)
-    return r.json()
+def get_msdk_headers(request: Request):
+    # Jo mobile link kholi hai uska User-Agent simulate karega
+    ua = request.headers.get("user-agent", "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)")
+    return {
+        "User-Agent": ua,
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Accept-Encoding": "gzip"
+    }
 
-# --- Internal: Verify Identity (Returns Token) ---
-def get_identity_token(token, headers):
-    data = {
+# --- 1. OTP Bhejne ka Endpoint ---
+@app.get("/api/request")
+async def request_otp(request: Request, token: str, email: str):
+    headers = get_msdk_headers(request)
+    payload = {
         "app_id": APP_ID,
         "access_token": token,
-        "secondary_password": sha256_hash(SEC_CODE)
+        "email": email,
+        "locale": "en_BD", # Specifically for BD
+        "region": "BD"     # Specifically for BD
     }
-    r = requests.post(f"{BASE_URL}/game/account_security/bind:verify_identity", data=data, headers=headers)
-    res = r.json()
-    return res.get("identity_token"), res
+    r = requests.post(f"{BASE_URL}/game/account_security/bind:send_otp", data=payload, headers=headers)
+    return {"status": "Request Processed", "garena_res": r.json()}
 
-# --- Internal: Verify OTP (Returns Verifier) ---
-def get_verifier_token(token, email, otp, headers):
-    data = {
+# --- 2. Confirm Bind (Fixing Error Params) ---
+@app.get("/api/confirm")
+async def confirm_bind(request: Request, token: str, email: str, otp: str):
+    headers = get_msdk_headers(request)
+    
+    # STEP A: Check Account Status (Email hai ya nahi)
+    info_params = {"app_id": APP_ID, "access_token": token}
+    info_res = requests.get(f"{BASE_URL}/game/account_security/bind:get_bind_info", params=info_params, headers=headers).json()
+    existing_email = info_res.get("email")
+
+    # STEP B: Verify OTP to get Verifier Token
+    v_payload = {
         "app_id": APP_ID,
         "access_token": token,
         "email": email,
         "otp": otp
     }
-    r = requests.post(f"{BASE_URL}/game/account_security/bind:verify_otp", data=data, headers=headers)
-    res = r.json()
-    return res.get("verifier_token"), res
+    v_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_otp", data=v_payload, headers=headers).json()
+    v_token = v_res.get("verifier_token")
 
-# --- ROUTES ---
-
-@app.get("/api/request")
-async def request_otp(request: Request, token: str, email: str):
-    headers = get_clean_headers(request)
-    
-    # Check if account is BD or other
-    payload = {
-        "app_id": APP_ID,
-        "access_token": token,
-        "email": email,
-        "locale": "en_BD",
-        "region": "BD"
-    }
-    r = requests.post(f"{BASE_URL}/game/account_security/bind:send_otp", data=payload, headers=headers)
-    return {"status": "OTP Sent", "garena_res": r.json()}
-
-@app.get("/api/confirm")
-async def confirm_bind(request: Request, token: str, email: str, otp: str):
-    headers = get_clean_headers(request)
-    
-    # 1. Check current bind status (Bahut zaroori hai error param se bachne ke liye)
-    status_res = get_status(token, headers)
-    current_email = status_res.get("email") # Agar mail hai toh rebind hoga
-
-    # 2. Verify OTP to get Verifier Token
-    v_token, v_raw = get_verifier_token(token, email, otp, headers)
     if not v_token:
-        return {"error": "OTP Verification Failed", "garena_msg": v_raw}
+        return {"error": "Invalid OTP", "details": v_res}
 
-    # 3. Final Binding Call
-    if current_email:
-        # REBIND FLOW (Requires Identity Token)
-        id_token, id_raw = get_identity_token(token, headers)
+    # STEP C: Binding Logic (Separated for Bind vs Rebind)
+    if existing_email:
+        # FLOW: REBIND (Existing email badalna)
+        # 1. Identity Token nikalo security code se
+        id_payload = {
+            "app_id": APP_ID,
+            "access_token": token,
+            "secondary_password": sha256_hash(SEC_CODE)
+        }
+        id_res = requests.post(f"{BASE_URL}/game/account_security/bind:verify_identity", data=id_payload, headers=headers).json()
+        id_token = id_res.get("identity_token")
+
         if not id_token:
-            return {"error": "Identity Token Failed (Security Code 123456 wrong or not set)", "garena_msg": id_raw}
-        
+            return {"error": "Identity Failed. Security code 123456 is wrong or not set.", "details": id_res}
+
+        # 2. Final Rebind Request
         final_payload = {
             "app_id": APP_ID,
             "access_token": token,
@@ -97,7 +84,8 @@ async def confirm_bind(request: Request, token: str, email: str, otp: str):
         }
         endpoint = "/game/account_security/bind:create_rebind_request"
     else:
-        # NEW BIND FLOW (Does NOT require Identity Token)
+        # FLOW: NEW BIND (First time binding)
+        # Identity token ISME NAHI LAGTA (Warna error_params aayega)
         final_payload = {
             "app_id": APP_ID,
             "access_token": token,
@@ -106,16 +94,19 @@ async def confirm_bind(request: Request, token: str, email: str, otp: str):
         }
         endpoint = "/game/account_security/bind:create_bind_request"
 
-    # 4. Hit Garena
-    r = requests.post(f"{BASE_URL}{endpoint}", data=final_payload, headers=headers)
+    # STEP D: Final API Call to Garena
+    final_res = requests.post(f"{BASE_URL}{endpoint}", data=final_payload, headers=headers).json()
+    
     return {
-        "type": "REBIND" if current_email else "NEW_BIND",
-        "result": r.json()
+        "type": "REBIND" if existing_email else "NEW_BIND",
+        "result": final_res,
+        "msg": "Success" if final_res.get("result") == 0 else "Failed"
     }
 
+# --- 3. Cancel Request (Optional) ---
 @app.get("/api/cancel")
-async def cancel(request: Request, token: str):
-    headers = get_clean_headers(request)
-    r = requests.post(f"{BASE_URL}/game/account_security/bind:cancel_request", 
-                      data={"app_id": APP_ID, "access_token": token}, headers=headers)
+async def cancel_bind(request: Request, token: str):
+    headers = get_msdk_headers(request)
+    data = {"app_id": APP_ID, "access_token": token}
+    r = requests.post(f"{BASE_URL}/game/account_security/bind:cancel_request", data=data, headers=headers)
     return r.json()
