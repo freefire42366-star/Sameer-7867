@@ -4,81 +4,111 @@ import hashlib
 
 app = FastAPI()
 
-# --- Full URLs from your BD Server List ---
-URL_SEND_OTP   = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
-URL_VERIFY_OTP = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
-URL_BIND_REQ   = "https://100067.connect.garena.com/game/account_security/bind:create_bind_request"
+U1 = "https://100067.connect.garena.com/game/account_security/bind:get_bind_info"
+U2 = "https://100067.connect.garena.com/game/account_security/bind:send_otp"
+U3 = "https://100067.connect.garena.com/game/account_security/bind:verify_otp"
+U4 = "https://100067.connect.garena.com/game/account_security/bind:create_bind_request"
+U5 = "https://100067.connect.garena.com/game/account_security/bind:verify_identity"
+U6 = "https://100067.connect.garena.com/game/account_security/bind:create_rebind_request"
+U7 = "https://100067.connect.garena.com/game/account_security/bind:create_unbind_request"
+U8 = "https://100067.connect.garena.com/game/account_security/bind:cancel_request"
+U9 = "https://100067.connect.garena.com/bind/app/platform/info/get"
+U10 = "https://100067.connect.garena.com/oauth/logout"
+U11 = "https://clientbp.ggwhitehawk.com/GetPlayerCSRankingInfoByAccountID"
+U12 = "https://clientbp.ggwhitehawk.com/GetFriendRequestList"
+U13 = "https://clientbp.ggwhitehawk.com/RequestAddingFriend"
+U14 = "https://clientbp.ggwhitehawk.com/RemoveFriend"
+U15 = "https://clientbp.ggwhitehawk.com/ConfirmFriendRequest"
+U16 = "https://clientbp.ggwhitehawk.com/DeclineFriendRequest"
+U17 = "https://100067.msdk.garena.com/api/msdk/v2/info/pricing"
 
-APP_ID = "100067"
-# Yeh security code set ho jayega binding ke sath
-NEW_SEC_CODE = "123456"
+AID = "100067"
+RTK = "1380dcb63ab3a077dc05bdf0b25ba4497c403a5b4eae96d7203010eafa6c83a8"
 
-def sha256_hash(s: str):
+def get_h(request: Request):
+    ua = request.headers.get("user-agent", "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)")
+    return {"User-Agent": ua, "Content-Type": "application/x-www-form-urlencoded", "Accept-Encoding": "gzip"}
+
+def hsh(s: str):
     return hashlib.sha256(s.encode()).hexdigest()
 
-def get_msdk_headers(request: Request):
-    ua = request.headers.get("user-agent", "GarenaMSDK/4.0.39 (M2007J22C; Android 10; en; US;)")
-    return {
-        "User-Agent": ua,
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Accept-Encoding": "gzip",
-        "Connection": "keep-alive"
-    }
-
 @app.get("/")
-def home():
-    return {"msg": "Sameer Fresh-Bind Engine Active", "fix": "Secondary Password Injection"}
+def start():
+    return {"status": "ACTIVE", "dev": "SAMEER"}
 
-# ================= STEP 1: SEND OTP =================
 @app.get("/api/request")
-async def send_otp(token: str, email: str, request: Request):
-    headers = get_msdk_headers(request)
-    payload = {
-        "app_id": APP_ID, 
-        "access_token": token, 
-        "email": email,
-        "locale": "en_PK", 
-        "region": "PK"
-    }
-    r = requests.post(URL_SEND_OTP, data=payload, headers=headers)
+async def req_otp(token: str, email: str, request: Request):
+    p = {"app_id": AID, "access_token": token, "email": email, "locale": "en_PK", "region": "PK"}
+    r = requests.post(U2, data=p, headers=get_h(request))
     return r.json()
 
-# ================= STEP 2: CONFIRM NEW BIND =================
-@app.get("/api/confirm")
-async def confirm(token: str, email: str, otp: str, request: Request):
-    headers = get_msdk_headers(request)
-    
-    # 1. OTP Verify karke Verifier Token nikalna
-    v_payload = {
-        "app_id": APP_ID, 
-        "access_token": token, 
-        "email": email, 
-        "otp": otp
-    }
-    v_res = requests.post(URL_VERIFY_OTP, data=v_payload, headers=headers).json()
-    v_token = v_res.get("verifier_token")
+@app.get("/api/confirm-new")
+async def bind_new(token: str, email: str, otp: str, sc: str = "123456", request: Request):
+    h = get_h(request)
+    v_res = requests.post(U3, data={"app_id": AID, "access_token": token, "email": email, "otp": otp}, headers=h).json()
+    vt = v_res.get("verifier_token")
+    if not vt: return {"status": "ERROR", "res": v_res}
+    p = {"app_id": AID, "access_token": token, "verifier_token": vt, "email": email, "secondary_password": hsh(sc)}
+    r = requests.post(U4, data=p, headers=h)
+    return r.json()
 
-    if not v_token:
-        return {"error": "OTP_INVALID", "garena_res": v_res}
+@app.get("/api/rebind")
+async def bind_change(token: str, email: str, otp: str, sc: str, request: Request):
+    h = get_h(request)
+    v_res = requests.post(U3, data={"app_id": AID, "access_token": token, "email": email, "otp": otp}, headers=h).json()
+    vt = v_res.get("verifier_token")
+    i_res = requests.post(U5, data={"app_id": AID, "access_token": token, "secondary_password": hsh(sc)}, headers=h).json()
+    it = i_res.get("identity_token")
+    if not vt or not it: return {"status": "ERROR", "vt": v_res, "it": i_res}
+    p = {"app_id": AID, "access_token": token, "identity_token": it, "verifier_token": vt, "email": email}
+    r = requests.post(U6, data=p, headers=h)
+    return r.json()
 
-    # 2. FRESH BIND PAYLOAD (As per Garena Protocol)
-    # Garena fresh bind mein 'secondary_password' set karne ko bolta hai
-    # Isko hash karke bhej rahe hain
-    pw_hash = sha256_hash(NEW_SEC_CODE)
-    
-    final_payload = {
-        "app_id": APP_ID,
-        "access_token": token,
-        "verifier_token": v_token,
-        "email": email,
-        "secondary_password": pw_hash # Yeh zaroori hai fresh bind ke liye
-    }
-    
-    # Final Hit to create_bind_request
-    final_r = requests.post(URL_BIND_REQ, data=final_payload, headers=headers)
-    
-    return {
-        "status": "Process Finished",
-        "action": "FRESH_NEW_BIND",
-        "garena_raw": final_r.json()
-    }
+@app.get("/api/unbind")
+async def unbind(token: str, sc: str, request: Request):
+    h = get_h(request)
+    i_res = requests.post(U5, data={"app_id": AID, "access_token": token, "secondary_password": hsh(sc)}, headers=h).json()
+    it = i_res.get("identity_token")
+    if not it: return i_res
+    r = requests.post(U7, data={"app_id": AID, "access_token": token, "identity_token": it}, headers=h)
+    return r.json()
+
+@app.get("/api/info")
+async def info(token: str, request: Request):
+    h = get_h(request)
+    b = requests.get(U1, params={"app_id": AID, "access_token": token}, headers=h).json()
+    r = requests.get(U11, params={"access_token": token}, headers=h).json()
+    return {"account": r, "bind": b}
+
+@app.get("/api/friends")
+async def friends(token: str, mode: str, target: str = None, request: Request):
+    h = get_h(request)
+    url_map = {"list": U12, "add": U13, "remove": U14, "accept": U15, "decline": U16}
+    params = {"access_token": token}
+    if target: params["target_account_id"] = target
+    r = requests.get(url_map.get(mode), params=params, headers=h)
+    return r.json()
+
+@app.get("/api/platforms")
+async def plat(token: str, request: Request):
+    r = requests.get(U9, params={"access_token": token}, headers=get_h(request))
+    return r.json()
+
+@app.get("/api/topup")
+async def topup(token: str, request: Request):
+    r = requests.get(U17, params={"access_token": token}, headers=get_h(request))
+    return r.json()
+
+@app.get("/api/cancel")
+async def cancel(token: str, request: Request):
+    r = requests.post(U8, data={"app_id": AID, "access_token": token}, headers=get_h(request))
+    return r.json()
+
+@app.get("/api/convert")
+async def conv(eat: str):
+    return {"url": f"https://api-otrss.garena.com/support/callback/?access_token={eat}"}
+
+@app.get("/api/revoke")
+async def revoke(token: str, request: Request):
+    r = requests.get(U10, params={"access_token": token, "refresh_token": RTK}, headers=get_h(request))
+    return {"res": r.text}
