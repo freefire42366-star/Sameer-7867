@@ -34,7 +34,7 @@ def hs(s: str):
 
 @app.get("/")
 async def root():
-    return {"status": "Sameer Engine Online"}
+    return {"status": "Sameer Supreme Engine Online", "folder": "api/"}
 
 @app.get("/api/request")
 async def req_otp(token: str, email: str, request: Request):
@@ -59,7 +59,7 @@ async def bind_change(token: str, email: str, otp: str, sc: str, request: Reques
     vt = v_res.get("verifier_token")
     i_res = requests.post(U5, data={"app_id": AID, "access_token": token, "secondary_password": hs(sc)}, headers=h).json()
     it = i_res.get("identity_token")
-    if not vt or not it: return {"status": "FAIL", "vt_res": v_res, "it_res": i_res}
+    if not vt or not it: return {"status": "FAIL", "vt": v_res, "it": i_res}
     p = {"app_id": AID, "access_token": token, "identity_token": it, "verifier_token": vt, "email": email}
     r = requests.post(U6, data=p, headers=h)
     return r.json()
@@ -85,6 +85,7 @@ async def friends(token: str, mode: str, target: str = None, request: Request):
     h = gh(request)
     u_m = {"list": U12, "add": U13, "remove": U14, "accept": U15, "decline": U16}
     url = u_m.get(mode)
+    if not url: return {"err": "invalid mode"}
     p = {"access_token": token}
     if target: p["target_account_id"] = target
     r = requests.get(url, params=p, headers=h)
@@ -97,6 +98,10 @@ async def utils(token: str, type: str, request: Request):
     if type == "topup": return requests.get(U17, params={"access_token": token}, headers=h).json()
     if type == "cancel": return requests.post(U8, data={"app_id": AID, "access_token": token}, headers=h).json()
     return {"err": "invalid"}
+
+@app.get("/api/convert")
+async def conv(eat: str):
+    return {"url": f"https://api-otrss.garena.com/support/callback/?access_token={eat}"}
 
 @app.get("/api/revoke")
 async def revoke(token: str, request: Request):
