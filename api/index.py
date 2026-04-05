@@ -33,8 +33,8 @@ def hs(s: str):
     return hashlib.sha256(s.encode()).hexdigest()
 
 @app.get("/")
-async def index():
-    return {"status": "Sameer Supreme Engine Live"}
+async def root():
+    return {"status": "Sameer Engine Online"}
 
 @app.get("/api/request")
 async def req_otp(token: str, email: str, request: Request):
